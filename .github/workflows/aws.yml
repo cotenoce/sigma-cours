@@ -1,0 +1,98 @@
+name: Build Docker Images
+on:
+  workflow_call:
+    inputs:
+      AWS_REGION_NAME:
+        required: true
+        type: string
+      AWS_ROLE_NAME:
+        required: true
+        type: string
+      AWS_ACCOUNT_ID:
+        required: true
+        type: string
+      ENV_NAME:
+        required: false
+        type: string
+      ENV_ID:
+        required: false
+        type: string
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Git clone the repository
+        uses: actions/checkout@v3
+
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: "${{ inputs.AWS_REGION_NAME }}"
+          role-to-assume: "arn:aws:iam::${{ inputs.AWS_ACCOUNT_ID }}:role/${{ inputs.AWS_ROLE_NAME }}"
+          role-session-name: "GitHub_to_AWS_via_FederatedOIDC"
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get all requirements files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@v44
+        with:
+          files_yaml: |
+            image1:
+              - docker/Dockerfile
+              - src/image1/**
+            image2:
+              - docker/Dockerfile
+              - src/image2/**
+
+      - name: Run step if Inception image file(s) change
+        if: steps.changed-files-yaml.outputs.image1_any_changed == 'true'
+        env:
+          IMAGE_ALL_CHANGED_FILES: ${{ steps.changed-files-yaml.outputs.image1_all_changed_files }}
+        run: |
+          echo "One or more Inception image file(s) has changed."
+          echo "List all the files that have changed: ${IMAGE_ALL_CHANGED_FILES}"
+
+      - name: Run step if CNN image model file(s) change
+        if: steps.changed-files-yaml.outputs.image2_any_changed == 'true'
+        env:
+          TEXT_ALL_CHANGED_FILES: ${{ steps.changed-files-yaml.outputs.image2_all_changed_files }}
+        run: |
+          echo "One or more CNN image file(s) has changed."
+          echo "List all the files that have changed: ${TEXT_ALL_CHANGED_FILES}"
+
+      - name: Build, tag, and push Inception image to Amazon ECR
+        if: steps.changed-files-yaml.outputs.image1_any_changed == 'true'
+        id: inception_image_build_politics
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ inputs.image1_REGISTRY_NAME }}
+          IMAGE_TAG: "${{ github.sha }}"
+          APP_ENV: ${{ inputs.ENV_ID }}
+          MODEL_NAME: ${{ inputs.image1_MODEL_NAME }}
+        run: |
+          docker build -f ./docker/Dockerfile --build-arg ENV=$APP_ENV --build-arg MODEL_NAME=$MODEL_NAME -t $REGISTRY/$REPOSITORY:$IMAGE_TAG -t $REGISTRY/$REPOSITORY:${APP_ENV}-latest ./
+          docker push $REGISTRY/$REPOSITORY --all-tags
+          echo Image tag = $REGISTRY/$REPOSITORY:$IMAGE_TAG
+          echo "image1_URL=$REGISTRY/$REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build, tag, and push CNN image to Amazon ECR
+        if: steps.changed-files-yaml.outputs.image2_any_changed == 'true'
+        id: image2_build
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ inputs.image2_REGISTRY_NAME }}
+          IMAGE_TAG: "${{ github.sha }}"
+          APP_ENV: ${{ inputs.ENV_ID }}
+          MODEL_NAME: ${{ inputs.image2_MODEL_NAME }}
+        run: |
+          docker build -f ./docker/Dockerfile --build-arg ENV=$APP_ENV --build-arg MODEL_NAME=$MODEL_NAME -t $REGISTRY/$REPOSITORY:$IMAGE_TAG -t $REGISTRY/$REPOSITORY:${APP_ENV}-latest ./
+          docker push $REGISTRY/$REPOSITORY --all-tags
+          echo Image tag = $REGISTRY/$REPOSITORY:$IMAGE_TAG
+          echo "image2_URL=$REGISTRY/$REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
